@@ -1,451 +1,1051 @@
 #!/usr/bin/env python3
-"""Draw the make.fun entry image for 24 November 2026.
+"""THE WORLD TODAY - Tuesday 24 November 2026.
 
-Pure standard library. Deterministic: no timestamps, no randomness,
-no network. Writes a 1024x1024 PNG to /output/entry.png by default
-(or to the path given as argv[1]).
-
-Design: dense one-page newspaper ("front page"), following the pattern
-of the top entries of the 22 November bounty (all 12-0-0, ~99% win
-rate): masthead + big date, a numbers strip, 3 lead stories, a
-schematic "where it happened" map, a grid of brief stories across
-7 regions, an "ALSO ON MONDAY" list, and a DATE CHECK footer.
-32 stories in total, all from reports dated Tuesday 24 November 2026
-(some events took place on Sunday 22 - Monday 23 November and were reported
-on Tuesday); nothing is copied from the 23 November entries.
+A one-page newspaper front page summing up the world's news of
+Tuesday 24 November 2026: 32 stories, 7 regions. Drawn from scratch
+with the standard library only: own bitmap font, own canvas, own
+PNG encoder. Deterministic: no time, no randomness, no network.
+Writes a 1024x1024 PNG to /output/entry.png, or to argv[1].
 """
+
+import binascii
 import os
 import struct
 import sys
 import zlib
 
-W, H = 1024, 1024
+W = 1024
+H = 1024
 
-# --- colours (r, g, b) -------------------------------------------------
-NAVY = (11, 42, 74)          # dark navy header #0B2A4A
-NAVY2 = (24, 78, 122)
+PAPER = (247, 243, 232)
+INK = (20, 20, 20)
+RED = (163, 22, 33)
+BLUE = (29, 78, 137)
+GREY = (96, 92, 82)
+LIGHT = (233, 228, 214)
+SEA = (214, 226, 232)
+LAND = (198, 206, 178)
+LANDLINE = (110, 118, 92)
 WHITE = (255, 255, 255)
-INK = (10, 18, 32)            # near-black headlines
-DARK = (35, 40, 52)           # near-black captions, never pale grey
-GREY = (52, 58, 68)           # darkest grey used anywhere (footer only)
-LIGHT = (234, 242, 248)
-LIGHT2 = (247, 249, 251)
-MAPBG = (224, 242, 236)       # pale mint map background
-MAPLAND = (46, 130, 122)      # mid blue-green continents
-MAPLAND2 = (38, 110, 170)     # mid blue for Asia blob contrast
-GOLD = (255, 196, 0)          # bright yellow masthead
-GOLD2 = (255, 220, 80)
-GREEN = (0, 110, 55)          # deep green
-GREEN_TINT = (208, 242, 220)  # light green tint
-RED = (200, 0, 24)            # deep red
-RED_TINT = (255, 220, 220)    # light red tint
-ORANGE = (210, 95, 0)         # deep orange
-ORANGE_TINT = (255, 232, 196) # light orange tint
-BRIGHTRED = (210, 0, 20)      # numbers strip
-TEAL = (0, 120, 120)
-PURPLE = (100, 40, 170)
-BLUE = (0, 85, 180)
-YELLOW_ROW = (255, 243, 205)  # very light yellow brief rows
-PALE = (238, 244, 250)
 
-# --- 5x7 bitmap font, uppercase only ----------------------------------
-FONT = {
-    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
-    "C": ("01110", "10001", "10000", "10000", "10000", "10001", "01110"),
-    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
-    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
-    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
-    "G": ("01110", "10001", "10000", "10111", "10001", "10001", "01111"),
-    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "I": ("01110", "00100", "00100", "00100", "00100", "00100", "01110"),
-    "J": ("00111", "00010", "00010", "00010", "00010", "10010", "01100"),
-    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
-    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
-    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
-    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
-    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
-    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
-    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
-    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
-    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "W": ("10001", "10001", "10001", "10101", "10101", "11011", "10001"),
-    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
-    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
-    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
-    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
-    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
-    "2": ("01110", "10001", "00001", "00110", "01000", "10000", "11111"),
-    "3": ("11111", "00010", "00100", "00010", "00001", "10001", "01110"),
-    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
-    "5": ("11111", "10000", "11110", "00001", "00001", "10001", "01110"),
-    "6": ("00110", "01000", "10000", "11110", "10001", "10001", "01110"),
-    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
-    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
-    "9": ("01110", "10001", "10001", "01111", "00001", "00010", "01100"),
-    " ": ("00000", "00000", "00000", "00000", "00000", "00000", "00000"),
-    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
-    ",": ("00000", "00000", "00000", "00000", "01100", "00100", "01000"),
-    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
-    "-": ("00000", "00000", "00000", "01110", "00000", "00000", "00000"),
-    "'": ("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
-    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
-    "%": ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
-    "(": ("00010", "00100", "01000", "01000", "01000", "00100", "00010"),
-    ")": ("01000", "00100", "00010", "00010", "00010", "00100", "01000"),
-    "$": ("00100", "01111", "10100", "01110", "00101", "11110", "00100"),
-    "?": ("01110", "10001", "00001", "00110", "00100", "00000", "00100"),
-    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
-    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
-}
+PIX = bytearray(W * H * 3)
 
 
-def text_width(text, scale):
-    return len(text) * (5 * scale + scale) - scale
+def set_px(x, y, col):
+    if 0 <= x < W and 0 <= y < H:
+        i = (y * W + x) * 3
+        PIX[i] = col[0]
+        PIX[i + 1] = col[1]
+        PIX[i + 2] = col[2]
 
 
-def wrap_text(text, scale, max_width):
-    """Greedy word wrap; returns list of lines, all uppercase."""
-    words = text.upper().split(" ")
-    lines, cur = [], ""
-    for word in words:
-        trial = word if not cur else cur + " " + word
-        if text_width(trial, scale) <= max_width:
+def fill_rect(x, y, w, h, col):
+    for yy in range(y, y + h):
+        if yy < 0 or yy >= H:
+            continue
+        base = (yy * W + max(x, 0)) * 3
+        for xx in range(max(x, 0), min(x + w, W)):
+            PIX[base] = col[0]
+            PIX[base + 1] = col[1]
+            PIX[base + 2] = col[2]
+            base += 3
+
+
+def hline(x, y, w, col, t=1):
+    fill_rect(x, y, w, t, col)
+
+
+def vline(x, y, h, col, t=1):
+    fill_rect(x, y, t, h, col)
+
+
+def rect(x, y, w, h, col, t=1):
+    hline(x, y, w, col, t)
+    hline(x, y + h - t, w, col, t)
+    vline(x, y, h, col, t)
+    vline(x + w - t, y, h, col, t)
+
+
+def line(x0, y0, x1, y1, col):
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    x, y = x0, y0
+    while True:
+        set_px(x, y, col)
+        if x == x1 and y == y1:
+            return
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x += sx
+        if e2 <= dx:
+            err += dx
+            y += sy
+
+
+def disc(cx, cy, r, col):
+    for yy in range(cy - r, cy + r + 1):
+        for xx in range(cx - r, cx + r + 1):
+            if (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy) <= r * r:
+                set_px(xx, yy, col)
+
+
+def poly_fill(points, col):
+    if len(points) < 3:
+        return
+    ys = [p[1] for p in points]
+    top, bot = min(ys), max(ys)
+    n = len(points)
+    for y in range(top, bot + 1):
+        xs = []
+        for i in range(n):
+            x0, y0 = points[i]
+            x1, y1 = points[(i + 1) % n]
+            if y0 == y1:
+                continue
+            if (y0 <= y < y1) or (y1 <= y < y0):
+                xs.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+        xs.sort()
+        for k in range(0, len(xs) - 1, 2):
+            xa = int(xs[k])
+            xb = int(xs[k + 1])
+            for xx in range(xa, xb + 1):
+                set_px(xx, y, col)
+
+
+def poly_outline(points, col):
+    n = len(points)
+    for i in range(n):
+        x0, y0 = points[i]
+        x1, y1 = points[(i + 1) % n]
+        line(x0, y0, x1, y1, col)
+
+
+# ---------------------------------------------------------------- font
+# A 5x7 bitmap font, drawn by hand here. Each glyph is 7 rows of 5
+# cells; '#' is ink, '.' is empty. Only capitals, digits and a few
+# punctuation marks: all page text is set in capitals, newspaper style.
+
+FONT = {}
+
+
+def _glyph(rows):
+    return rows
+
+
+FONT["A"] = _glyph([
+    ".###.",
+    "#...#",
+    "#...#",
+    "#####",
+    "#...#",
+    "#...#",
+    "#...#",
+])
+FONT["B"] = _glyph([
+    "####.",
+    "#...#",
+    "#...#",
+    "####.",
+    "#...#",
+    "#...#",
+    "####.",
+])
+FONT["C"] = _glyph([
+    ".####",
+    "#....",
+    "#....",
+    "#....",
+    "#....",
+    "#....",
+    ".####",
+])
+FONT["D"] = _glyph([
+    "####.",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "####.",
+])
+FONT["E"] = _glyph([
+    "#####",
+    "#....",
+    "#....",
+    "####.",
+    "#....",
+    "#....",
+    "#####",
+])
+FONT["F"] = _glyph([
+    "#####",
+    "#....",
+    "#....",
+    "####.",
+    "#....",
+    "#....",
+    "#....",
+])
+FONT["G"] = _glyph([
+    ".####",
+    "#....",
+    "#....",
+    "#..##",
+    "#...#",
+    "#...#",
+    ".###.",
+])
+FONT["H"] = _glyph([
+    "#...#",
+    "#...#",
+    "#...#",
+    "#####",
+    "#...#",
+    "#...#",
+    "#...#",
+])
+FONT["I"] = _glyph([
+    ".###.",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    ".###.",
+])
+FONT["J"] = _glyph([
+    "..###",
+    "...#.",
+    "...#.",
+    "...#.",
+    "...#.",
+    "#..#.",
+    ".##..",
+])
+FONT["K"] = _glyph([
+    "#...#",
+    "#..#.",
+    "#.#..",
+    "##...",
+    "#.#..",
+    "#..#.",
+    "#...#",
+])
+FONT["L"] = _glyph([
+    "#....",
+    "#....",
+    "#....",
+    "#....",
+    "#....",
+    "#....",
+    "#####",
+])
+FONT["M"] = _glyph([
+    "#...#",
+    "##.##",
+    "#.#.#",
+    "#.#.#",
+    "#...#",
+    "#...#",
+    "#...#",
+])
+FONT["N"] = _glyph([
+    "#...#",
+    "##..#",
+    "#.#.#",
+    "#..##",
+    "#...#",
+    "#...#",
+    "#...#",
+])
+FONT["O"] = _glyph([
+    ".###.",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".###.",
+])
+FONT["P"] = _glyph([
+    "####.",
+    "#...#",
+    "#...#",
+    "####.",
+    "#....",
+    "#....",
+    "#....",
+])
+FONT["Q"] = _glyph([
+    ".###.",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#.#.#",
+    "#..#.",
+    ".##.#",
+])
+FONT["R"] = _glyph([
+    "####.",
+    "#...#",
+    "#...#",
+    "####.",
+    "#.#..",
+    "#..#.",
+    "#...#",
+])
+FONT["S"] = _glyph([
+    ".####",
+    "#....",
+    "#....",
+    ".###.",
+    "....#",
+    "....#",
+    "####.",
+])
+FONT["T"] = _glyph([
+    "#####",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+])
+FONT["U"] = _glyph([
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".###.",
+])
+FONT["V"] = _glyph([
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    "#...#",
+    ".#.#.",
+    "..#..",
+])
+FONT["W"] = _glyph([
+    "#...#",
+    "#...#",
+    "#...#",
+    "#.#.#",
+    "#.#.#",
+    "##.##",
+    "#...#",
+])
+FONT["X"] = _glyph([
+    "#...#",
+    "#...#",
+    ".#.#.",
+    "..#..",
+    ".#.#.",
+    "#...#",
+    "#...#",
+])
+FONT["Y"] = _glyph([
+    "#...#",
+    "#...#",
+    ".#.#.",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+])
+FONT["Z"] = _glyph([
+    "#####",
+    "....#",
+    "...#.",
+    "..#..",
+    ".#...",
+    "#....",
+    "#####",
+])
+FONT["0"] = _glyph([
+    ".###.",
+    "#...#",
+    "#..##",
+    "#.#.#",
+    "##..#",
+    "#...#",
+    ".###.",
+])
+FONT["1"] = _glyph([
+    "..#..",
+    ".##..",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    ".###.",
+])
+FONT["2"] = _glyph([
+    ".###.",
+    "#...#",
+    "....#",
+    "...#.",
+    "..#..",
+    ".#...",
+    "#####",
+])
+FONT["3"] = _glyph([
+    "####.",
+    "....#",
+    "....#",
+    ".###.",
+    "....#",
+    "....#",
+    "####.",
+])
+FONT["4"] = _glyph([
+    "...#.",
+    "..##.",
+    ".#.#.",
+    "#..#.",
+    "#####",
+    "...#.",
+    "...#.",
+])
+FONT["5"] = _glyph([
+    "#####",
+    "#....",
+    "####.",
+    "....#",
+    "....#",
+    "#...#",
+    ".###.",
+])
+FONT["6"] = _glyph([
+    ".###.",
+    "#....",
+    "#....",
+    "####.",
+    "#...#",
+    "#...#",
+    ".###.",
+])
+FONT["7"] = _glyph([
+    "#####",
+    "....#",
+    "...#.",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+])
+FONT["8"] = _glyph([
+    ".###.",
+    "#...#",
+    "#...#",
+    ".###.",
+    "#...#",
+    "#...#",
+    ".###.",
+])
+FONT["9"] = _glyph([
+    ".###.",
+    "#...#",
+    "#...#",
+    ".####",
+    "....#",
+    "....#",
+    ".###.",
+])
+FONT[" "] = _glyph([
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+])
+FONT["."] = _glyph([
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    "..##.",
+    "..##.",
+])
+FONT[","] = _glyph([
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    "..##.",
+    "..#..",
+    ".#...",
+])
+FONT["-"] = _glyph([
+    ".....",
+    ".....",
+    ".....",
+    "#####",
+    ".....",
+    ".....",
+    ".....",
+])
+FONT["'"] = _glyph([
+    "..#..",
+    "..#..",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+])
+FONT["!"] = _glyph([
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    "..#..",
+    ".....",
+    "..#..",
+])
+FONT["?"] = _glyph([
+    ".###.",
+    "#...#",
+    "....#",
+    "...#.",
+    "..#..",
+    ".....",
+    "..#..",
+])
+FONT["/"] = _glyph([
+    "....#",
+    "....#",
+    "...#.",
+    "..#..",
+    ".#...",
+    "#....",
+    "#....",
+])
+FONT["("] = _glyph([
+    "...#.",
+    "..#..",
+    ".#...",
+    ".#...",
+    ".#...",
+    "..#..",
+    "...#.",
+])
+FONT[")"] = _glyph([
+    ".#...",
+    "..#..",
+    "...#.",
+    "...#.",
+    "...#.",
+    "..#..",
+    ".#...",
+])
+FONT["%"] = _glyph([
+    "#...#",
+    "#..#.",
+    "...#.",
+    "..#..",
+    ".#...",
+    "#..#.",
+    "#...#",
+])
+FONT["+"] = _glyph([
+    ".....",
+    "..#..",
+    "..#..",
+    "#####",
+    "..#..",
+    "..#..",
+    ".....",
+])
+FONT["&"] = _glyph([
+    ".##..",
+    "#..#.",
+    "#..#.",
+    ".#...",
+    "#.#.#",
+    "#..#.",
+    ".##.#",
+])
+FONT["="] = _glyph([
+    ".....",
+    ".....",
+    "#####",
+    ".....",
+    "#####",
+    ".....",
+    ".....",
+])
+FONT[";"] = _glyph([
+    ".....",
+    "..##.",
+    "..##.",
+    ".....",
+    "..##.",
+    "..#..",
+    ".#...",
+])
+FONT[":"] = _glyph([
+    ".....",
+    "..##.",
+    "..##.",
+    ".....",
+    "..##.",
+    "..##.",
+    ".....",
+])
+FONT["*"] = _glyph([
+    ".....",
+    ".#.#.",
+    "..#..",
+    "#####",
+    "..#..",
+    ".#.#.",
+    ".....",
+])
+FONT['"'] = _glyph([
+    ".#.#.",
+    ".#.#.",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+])
+FONT["_"] = _glyph([
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    ".....",
+    "#####",
+])
+FONT["<"] = _glyph([
+    "....#",
+    "...#.",
+    "..#..",
+    ".#...",
+    "..#..",
+    "...#.",
+    "....#",
+])
+FONT[">"] = _glyph([
+    "#....",
+    ".#...",
+    "..#..",
+    "...#.",
+    "..#..",
+    ".#...",
+    "#....",
+])
+FONT["$"] = _glyph([
+    "..#..",
+    ".####",
+    "#.#.#",
+    ".###.",
+    "..#.#",
+    "####.",
+    "..#..",
+])
+FONT["@"] = _glyph([
+    ".###.",
+    "#...#",
+    "#.###",
+    "#.#.#",
+    "#.###",
+    "#....",
+    ".###.",
+])
+FONT["["] = _glyph([
+    ".###.",
+    ".#...",
+    ".#...",
+    ".#...",
+    ".#...",
+    ".#...",
+    ".###.",
+])
+FONT["]"] = _glyph([
+    ".###.",
+    "...#.",
+    "...#.",
+    "...#.",
+    "...#.",
+    "...#.",
+    ".###.",
+])
+
+
+# ------------------------------------------------------------ text out
+def draw_char(x, y, ch, scale, col):
+    rows = FONT.get(ch, FONT["A"])
+    for r in range(7):
+        row = rows[r].ljust(5, ".")
+        for c in range(5):
+            if row[c] == "#":
+                fill_rect(x + c * scale, y + r * scale, scale, scale, col)
+
+
+def text_w(s, scale):
+    return len(s) * 6 * scale
+
+
+def draw_text(x, y, s, scale, col, bold=False):
+    s = s.upper()
+    cx = x
+    for ch in s:
+        draw_char(cx, y, ch, scale, col)
+        if bold:
+            draw_char(cx + max(1, scale // 2), y, ch, scale, col)
+        cx += 6 * scale
+    return cx
+
+
+def draw_centred(cx, y, s, scale, col, bold=False):
+    draw_text(cx - text_w(s, scale) // 2, y, s, scale, col, bold)
+
+
+def draw_right(rx, y, s, scale, col, bold=False):
+    draw_text(rx - text_w(s, scale), y, s, scale, col, bold)
+
+
+def wrap(s, scale, maxw):
+    words = s.upper().split(" ")
+    lines = []
+    cur = ""
+    for w in words:
+        trial = w if not cur else cur + " " + w
+        if text_w(trial, scale) <= maxw or not cur:
             cur = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
+            lines.append(cur)
+            cur = w
     if cur:
         lines.append(cur)
     return lines
 
 
-class Canvas:
-    def __init__(self, w, h, bg):
-        self.w, self.h = w, h
-        self.pix = bytearray(bg * w * h)
-
-    def set(self, x, y, c):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.pix[i:i + 3] = bytes(c)
-
-    def rect(self, x, y, w, h, c):
-        for yy in range(y, y + h):
-            for xx in range(x, x + w):
-                self.set(xx, yy, c)
-
-    def line(self, x0, y0, x1, y1, c, thick=1):
-        dx = abs(x1 - x0)
-        dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx + dy
-        while True:
-            for a in range(-thick // 2, thick // 2 + 1):
-                for b in range(-thick // 2, thick // 2 + 1):
-                    self.set(x0 + a, y0 + b, c)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 >= dy:
-                err += dy
-                x0 += sx
-            if e2 <= dx:
-                err += dx
-                y0 += sy
-
-    def circle(self, cx, cy, r, c, fill=True):
-        for yy in range(cy - r, cy + r + 1):
-            for xx in range(cx - r, cx + r + 1):
-                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
-                if fill:
-                    if d2 <= r * r:
-                        self.set(xx, yy, c)
-                else:
-                    if abs(d2 - r * r) <= r * 2:
-                        self.set(xx, yy, c)
-
-    def ellipse(self, cx, cy, rx, ry, c):
-        for yy in range(cy - ry, cy + ry + 1):
-            t = 1.0 - ((yy - cy) / ry) ** 2
-            if t < 0:
-                continue
-            dx = int(rx * (t ** 0.5))
-            for xx in range(cx - dx, cx + dx + 1):
-                self.set(xx, yy, c)
-
-    def triangle(self, p1, p2, p3, c):
-        xs = [p1[0], p2[0], p3[0]]
-        ys = [p1[1], p2[1], p3[1]]
-        for yy in range(min(ys), max(ys) + 1):
-            for xx in range(min(xs), max(xs) + 1):
-                d1 = (xx - p2[0]) * (p1[1] - p2[1]) - (p1[0] - p2[0]) * (yy - p2[1])
-                d2 = (xx - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (yy - p3[1])
-                d3 = (xx - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (yy - p1[1])
-                if (d1 >= 0 and d2 >= 0 and d3 >= 0) or (d1 <= 0 and d2 <= 0 and d3 <= 0):
-                    self.set(xx, yy, c)
-
-    def text(self, x, y, s, scale, c, bold=False):
-        s = s.upper()
-        offsets = [(0, 0), (1, 0), (0, 1)] if bold else [(0, 0)]
-        for ox, oy in offsets:
-            cx = x + ox
-            for ch in s:
-                glyph = FONT.get(ch, FONT[" "])
-                for row in range(7):
-                    for col in range(5):
-                        if glyph[row][col] == "1":
-                            self.rect(cx + col * scale, y + oy + row * scale,
-                                      scale, scale, c)
-                cx += 6 * scale
-
-    def text_center(self, y, s, scale, c, bold=False):
-        x = (self.w - text_width(s, scale)) // 2
-        self.text(x, y, s, scale, c, bold=bold)
-
-    def text_center_in(self, x0, w, y, s, scale, c, bold=False):
-        x = x0 + (w - text_width(s, scale)) // 2
-        self.text(x, y, s, scale, c, bold=bold)
-
-    def png_bytes(self):
-        raw = bytearray()
-        stride = self.w * 3
-        for y in range(self.h):
-            raw.append(0)
-            raw += self.pix[y * stride:(y + 1) * stride]
-        def chunk(kind, data):
-            out = struct.pack(">I", len(data)) + kind + data
-            out += struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-            return out
-        ihdr = struct.pack(">IIBBBBB", self.w, self.h, 8, 2, 0, 0, 0)
-        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
-                + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-                + chunk(b"IEND", b""))
+def draw_wrapped(x, y, s, scale, maxw, col, max_lines=None, leading=None):
+    if leading is None:
+        leading = 7 * scale + 3
+    lines = wrap(s, scale, maxw)
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    for i, ln in enumerate(lines):
+        draw_text(x, y + i * leading, ln, scale, col)
+    return y + len(lines) * leading
 
 
-# --- icons, drawn in a 96x96 box ---------------------------------------
-def draw_icon(cv, kind, x, y, colour):
-    cx, cy = x + 48, y + 48
-    if kind == "globe":
-        cv.circle(cx, cy, 34, colour)
-        cv.line(cx - 34, cy, cx + 34, cy, WHITE, 3)
-        cv.line(cx, cy - 34, cx, cy + 34, WHITE, 3)
-        cv.circle(cx, cy, 34, WHITE, fill=False)
-        cv.rect(cx - 20, cy - 8, 40, 4, WHITE)
-        cv.rect(cx - 20, cy + 6, 40, 4, WHITE)
-    elif kind == "missile":
-        cv.rect(cx - 34, cy - 7, 56, 14, colour)
-        cv.triangle((cx + 22, cy - 13), (cx + 22, cy + 13), (cx + 42, cy), colour)
-        cv.triangle((cx - 34, cy - 7), (cx - 44, cy - 24), (cx - 26, cy - 7), colour)
-        cv.triangle((cx - 34, cy + 7), (cx - 44, cy + 24), (cx - 26, cy + 7), colour)
-        cv.circle(cx + 10, cy, 5, WHITE)
-    elif kind == "drop":
-        cv.triangle((cx, cy - 36), (cx - 26, cy + 6), (cx + 26, cy + 6), colour)
-        cv.circle(cx, cy + 6, 26, colour)
-        cv.circle(cx - 9, cy + 2, 6, WHITE)
+def draw_wrapped_centred(cx, y, s, scale, maxw, col, max_lines=None):
+    lines = wrap(s, scale, maxw)
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    leading = 7 * scale + 3
+    for i, ln in enumerate(lines):
+        draw_centred(cx, y + i * leading, ln, scale, col)
+    return y + len(lines) * leading
 
 
-# --- content: 32 stories, all from 24 Nov 2026 reports -----------------
-# 3 leads: (tag, icon, colour, headline, caption)
+# ------------------------------------------------------------ png out
+def _chunk(kind, data):
+    crc = binascii.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+
+def png_bytes():
+    raw = bytearray()
+    for y in range(H):
+        raw.append(0)
+        raw.extend(PIX[y * W * 3:(y + 1) * W * 3])
+    comp = zlib.compress(bytes(raw), 9)
+    head = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    out = b"\x89PNG\r\n\x1a\n"
+    out += _chunk(b"IHDR", head)
+    out += _chunk(b"IDAT", comp)
+    out += _chunk(b"IEND", b"")
+    return out
+
+
+def save(path):
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(png_bytes())
+
+# ------------------------------------------------------------ the news
+# All 32 stories first reported Tuesday 24 November 2026 (see
+# SOURCES.md). Three leads, sixteen briefs, thirteen also. Seven
+# regions: Europe 6, Middle East 7, Americas 4, Asia-Pacific 9,
+# Africa 2, Oceania 1, World 3.
+
 LEADS = [
-    ("TECH", "globe", GREEN,
-     "HUAWEI FOUND GUILTY",
-     "US jury convicts on 10 of 12 counts. Trade secrets, bank "
-     "fraud, sanctions violations."),
-    ("GULF", "missile", RED,
-     "DRONE HITS RIYADH TOWER",
-     "Houthi strike wounds 11 in the financial district. Second "
-     "hit in under a week."),
-    ("HORMUZ", "drop", ORANGE,
-     "4 TANKERS HIT MINES",
-     "IRGC says mines hit tankers in Hormuz. Claims unconfirmed."),
+    (
+        "UNITED STATES - VERDICT",
+        "HUAWEI GUILTY ON 10 OF 12 COUNTS",
+        "A US JURY CONVICTS HUAWEI OF TRADE-SECRET THEFT, BANK "
+        "FRAUD AND SANCTIONS VIOLATIONS, AND ACQUITS IT OF "
+        "RACKETEERING.",
+    ),
+    (
+        "SAUDI ARABIA - DRONE ATTACK",
+        "DRONE HITS RIYADH PIF TOWER; 11 WOUNDED",
+        "A SUSPECTED HOUTHI DRONE STRIKES A TOWER IN RIYADH'S "
+        "KING ABDULLAH FINANCIAL DISTRICT. THE SECOND STRIKE IN "
+        "UNDER A WEEK.",
+    ),
+    (
+        "STRAIT OF HORMUZ - MINES",
+        "4 TANKERS HIT MINES AND CATCH FIRE",
+        "IRAN'S IRGC SAYS FOUR TANKERS HIT NAVAL MINES IN THE "
+        "STRAIT AND CAUGHT FIRE. THE MINE CLAIMS ARE UNCONFIRMED.",
+    ),
 ]
 
-# 16 brief stories: (colour, headline, caption) - 2 columns x 8 rows
+NUMBERS = [
+    ("4", "TANKERS HIT BY MINES IN THE STRAIT OF HORMUZ"),
+    ("11", "WOUNDED IN THE RIYADH PIF TOWER ATTACK"),
+    ("25", "HOSTAGES HELD AT A CARTAGENA SUPERMARKET"),
+    ("47,000", "WOMEN KILLED BY PARTNERS OR FAMILY IN A YEAR - UN"),
+    ("5.6", "MAGNITUDE OF THE EARTHQUAKE IN EASTERN NEPAL"),
+    ("+31%", "NVIDIA SHARE JUMP AS HUANG RETURNS AS CEO"),
+]
+
 BRIEFS = [
-    (BLUE, "UKRAINE HITS RUSSIAN SHIPS",
-     "DRONES STRIKE IN FINLAND GULF, LIBYA"),
-    (RED, "ZAPORIZHZHIA STRIKE KILLS 2",
-     "40 WOUNDED, 4 CHILDREN, IN FLAT HIT"),
-    (ORANGE, "ISRAEL KILLS HAMAS SECURITY CHIEF",
-     "GAZA STRIKE DESPITE CEASEFIRE"),
-    (RED, "HOUTHIS 60 KM FROM ADEN",
-     "YEMEN ARMY: READY TO ATTACK"),
-    (BLUE, "UK SANCTIONS HOUTHIS",
-     "FREEZES, TRAVEL BANS ON 4 OFFICIALS"),
-    (ORANGE, "SAUDI STRIKES KILL 25 IN YEMEN",
-     "BUSES, TRUCKS HIT IN LAHJ"),
-    (TEAL, "IRAQ TAKES KURDISH OILFIELDS",
-     "KURDISH PM: UNACCEPTABLE"),
-    (GREEN, "NVIDIA SOARS 31% ON HUANG RETURN",
-     "NASDAQ UP 6.5%, S&P UP 4.75%"),
-    (PURPLE, "US BLACKLISTS MEGASPEED",
-     "7 FIRMS IN NVIDIA SCANDAL LISTED"),
-    (TEAL, "CHINA EXTENDS MINERALS BAN PAUSE",
-     "GALLIUM, GERMANIUM TO JAN 2027"),
-    (BLUE, "PENTAGON REBUKES CANADA",
-     "ONLY 41.9% OF AIR FLEET READY"),
-    (GREEN, "SENEGAL REGAIN AFRICA CUP",
-     "CAS OVERTURNS MOROCCO RULING"),
-    (GREEN, "REAL MADRID THRASH PSV 5-1",
-     "MBAPPE SCORES TWICE AT BERNABEU"),
-    (ORANGE, "5.6 QUAKE SHAKES NEPAL",
-     "FELT IN KATHMANDU, SIKKIM"),
-    (RED, "47,000 WOMEN KILLED BY FAMILY",
-     "UN: 5 WOMEN AN HOUR WORLDWIDE"),
-    (TEAL, "EBOLA WORKERS TRAPPED IN CONGO",
-     "WHO STAFF SHELTER AMID FIGHTING"),
+    ("UKRAINE HITS RUSSIAN SHIPS",
+     "KYIV ACKNOWLEDGES A DRONE STRIKE ON THE CARGO SHIP SPARTA II; "
+     "NAVAL DRONES HIT SHIPS OFF LIBYA."),
+    ("ZAPORIZHZHIA STRIKE",
+     "OVERNIGHT RUSSIAN ATTACK KILLS 2 AND WOUNDS 40, INCLUDING "
+     "FOUR CHILDREN."),
+    ("ISRAEL KILLS HAMAS SECURITY CHIEF",
+     "BRIG. GEN. NAEEM ABU NAHEL KILLED IN GAZA DESPITE THE "
+     "CEASEFIRE SINCE OCTOBER 2025."),
+    ("HOUTHIS 60 KM FROM ADEN",
+     "YEMEN'S MILITARY SAYS HOUTHI FIGHTERS ARE READY TO ATTACK "
+     "THE TEMPORARY CAPITAL."),
+    ("UK SANCTIONS HOUTHIS",
+     "ASSET FREEZES AND TRAVEL BANS ON THE HOUTHIS AND FOUR SENIOR "
+     "OFFICIALS."),
+    ("SAUDI STRIKES KILL 25 IN YEMEN",
+     "STRIKES ON BUSES AND TRUCKS IN WADI MAABAQ, LAHJ; SIX "
+     "WOUNDED, 25 DEAD OR MISSING."),
+    ("IRAQ TAKES KURDISH OILFIELDS",
+     "BAGHDAD ORDERS FEDERAL CONTROL OF OILFIELDS; KURDISH PM CALLS "
+     "IT UNACCEPTABLE."),
+    ("NVIDIA SURGES 31%",
+     "SHARES JUMP AS JENSEN HUANG RETURNS AS CEO; NASDAQ UP 6.5%, "
+     "S&P 500 UP 4.75%."),
+    ("US BLACKLISTS MEGASPEED",
+     "SINGAPORE FIRM AT THE CENTRE OF THE NVIDIA SCANDAL JOINS THE "
+     "US ENTITY LIST."),
+    ("CHINA EXTENDS MINERALS BAN PAUSE",
+     "SUSPENSION OF THE GALLIUM, GERMANIUM AND ANTIMONY EXPORT BAN "
+     "EXTENDED TO 27 JANUARY 2027."),
+    ("PENTAGON REBUKES CANADA",
+     "US SAYS CANADA FALLS SHORT AS A DEFENCE PARTNER; ONLY 41.9% "
+     "OF ITS AIR FLEET SERVICEABLE."),
+    ("SENEGAL REGAIN AFRICA CUP",
+     "CAS OVERTURNS THE RULING THAT GAVE THE TROPHY TO MOROCCO; "
+     "SENEGAL'S 1-0 WIN REINSTATED."),
+    ("REAL MADRID THRASH PSV 5-1",
+     "MBAPPE SCORES TWICE AT THE BERNABEU; REAL STAY PERFECT, "
+     "5 WINS FROM 5."),
+    ("5.6 QUAKE SHAKES NEPAL",
+     "EPICENTRE NEAR THE TIBET BORDER; FELT IN KATHMANDU, SIKKIM "
+     "AND BANGLADESH. NO CASUALTIES."),
+    ("5 WOMEN KILLED EVERY HOUR",
+     "UN: 47,000 WOMEN AND GIRLS KILLED BY PARTNERS OR FAMILY "
+     "LAST YEAR."),
+    ("EBOLA WORKERS TRAPPED IN CONGO",
+     "HEALTH WORKERS SHELTER IN A HOSPITAL IN ITURI FOR OVER "
+     "48 HOURS AMID FIGHTING."),
 ]
 
-# 13 more one-line stories
 ALSO = [
-    "ICJ: MYANMAR GUILTY OF ROHINGYA GENOCIDE",
-    "GAZA MENINGITIS ALERT: 272 CASES IN OCTOBER, 15 DEAD",
-    "HANOI RESTAURANT BLAST KILLS AT LEAST 6",
-    "25 HOSTAGES HELD AT CARTAGENA SUPERMARKET",
-    "CAR BOMB IN VILLAVICENCIO INJURES 23",
-    "TURKISH HELICOPTER CRASH KILLS 5",
-    "INDONESIA NAMES 2 VP CANDIDATES TO REPLACE GIBRAN",
-    "MALAYSIA TO RETURN MIGRANTS TO MYANMAR",
-    "HASINA PLANS BANGLADESH RETURN ON 16 DEC",
-    "CHINA SENTENCES OFFICIAL TO DEATH FOR SPYING",
-    "UN CHIEF CALLS FOR GLOBAL AI SAFETY FRAMEWORK",
-    "NATO VOWS DEFENCE AGAINST SPACE THREAT",
-    "AUSTRALIA SETS 46 AI GOVERNANCE RULES",
+    "20. ICJ: MYANMAR GUILTY OF ROHINGYA GENOCIDE, 9-6 RULING",
+    "21. GAZA MENINGITIS ALERT: 272 CASES IN OCTOBER, 15 DEAD",
+    "22. HANOI RESTAURANT BLAST KILLS AT LEAST 6",
+    "23. GUNMEN HOLD 25 HOSTAGES AT CARTAGENA SUPERMARKET",
+    "24. CAR BOMB IN VILLAVICENCIO INJURES 23",
+    "25. TURKISH HELICOPTER CRASH KILLS 5",
+    "26. INDONESIA NAMES 2 CANDIDATES TO REPLACE VP GIBRAN",
+    "27. MALAYSIA TO SEND THOUSANDS OF MIGRANTS BACK TO MYANMAR",
+    "28. HASINA PLANS RETURN TO BANGLADESH ON 16 DECEMBER",
+    "29. CHINA SENTENCES OFFICIAL TO DEATH FOR SPYING",
+    "30. UN CHIEF CALLS FOR GLOBAL AI SAFETY FRAMEWORK",
+    "31. NATO VOWS DEFENCE AGAINST SPACE THREAT",
+    "32. AUSTRALIA SETS OUT 46 AI GOVERNANCE RECOMMENDATIONS",
 ]
 
-# Schematic world map: (cx, cy, rx, ry) land blobs, then red dots
-MAP_LAND = [
-    (140, 436, 78, 12),   # North America
-    (232, 452, 26, 9),    # South America
-    (480, 432, 30, 8),    # Europe
-    (496, 450, 32, 12),   # Africa
-    (660, 436, 122, 12),  # Asia
-    (790, 454, 40, 6),    # SE Asia
-    (852, 456, 30, 6),    # Australia
+# Schematic continents, drawn as rough polygons inside the map box.
+CONTINENTS = [
+    [(70, 375), (150, 362), (235, 368), (255, 392), (215, 415),
+     (175, 428), (130, 420), (85, 405)],
+    [(255, 362), (275, 358), (285, 368), (265, 375)],
+    [(235, 432), (275, 428), (295, 448), (275, 482), (250, 478),
+     (232, 455)],
+    [(470, 368), (520, 358), (548, 372), (535, 392), (500, 396),
+     (478, 382)],
+    [(478, 408), (540, 402), (568, 428), (548, 468), (512, 478),
+     (488, 442)],
+    [(552, 362), (700, 352), (775, 368), (760, 398), (700, 418),
+     (640, 412), (585, 398), (555, 380)],
+    [(700, 425), (725, 420), (730, 432), (705, 436)],
+    [(735, 438), (755, 435), (758, 445), (738, 448)],
+    [(705, 452), (752, 448), (765, 466), (730, 480), (700, 470)],
 ]
-# (dot x, dot y, label, label x, label y)
-MAP_DOTS = [
-    (120, 434, "WASHINGTON", 130, 426),
-    (470, 430, "KYIV", 434, 418),
-    (530, 444, "RIYADH", 542, 436),
-    (600, 434, "HORMUZ", 610, 426),
-    (490, 456, "LIBYA", 438, 452),
-    (700, 434, "NEPAL", 710, 426),
-    (790, 454, "JAKARTA", 800, 446),
+
+# (x, y, label, label dx, label dy) - places in the day's news.
+DOTS = [
+    (522, 376, "KYIV", 8, -3),
+    (490, 370, "LONDON", -52, -3),
+    (588, 402, "RIYADH", 8, -14),
+    (612, 406, "HORMUZ", 10, 4),
+    (556, 392, "GAZA", -38, -3),
+    (600, 430, "ADEN", 8, -3),
+    (452, 420, "SENEGAL", -62, -3),
+    (525, 448, "ITURI", 8, -3),
+    (668, 392, "KATHMANDU", 8, -3),
+    (700, 408, "HANOI", 8, -3),
+    (150, 438, "CARTAGENA", 8, -3),
+    (738, 466, "CANBERRA", 8, -3),
 ]
+
+# ------------------------------------------------------------ layout
+MARGIN = 28
+RIGHT = 996
+
+
+def section_head(y, text, note=None):
+    draw_text(MARGIN, y, text, 2, RED, bold=True)
+    if note:
+        draw_right(RIGHT, y + 3, note, 1, GREY)
+    hline(MARGIN, y + 20, RIGHT - MARGIN, INK, 2)
+
+
+def draw_masthead():
+    fill_rect(0, 0, W, 6, INK)
+    draw_centred(W // 2, 16, "THE WORLD TODAY", 7, INK)
+    draw_text(MARGIN, 38, "VOL. II", 1, GREY)
+    draw_right(RIGHT, 38, "TUESDAY EDITION", 1, GREY)
+    hline(MARGIN, 74, RIGHT - MARGIN, INK, 3)
+    hline(MARGIN, 79, RIGHT - MARGIN, RED, 1)
+    draw_text(MARGIN, 88, "TUESDAY 24 NOVEMBER 2026", 2, INK, bold=True)
+    draw_right(RIGHT, 88, "32 STORIES - 7 REGIONS", 2, INK, bold=True)
+    hline(MARGIN, 108, RIGHT - MARGIN, INK, 1)
+
+
+def draw_numbers():
+    y = 116
+    box_w = 156
+    gap = 6
+    for i, (big, label) in enumerate(NUMBERS):
+        x = MARGIN + i * (box_w + gap)
+        rect(x, y, box_w, 54, GREY, 1)
+        draw_centred(x + box_w // 2, y + 6, big, 2, RED, bold=True)
+        draw_wrapped_centred(x + box_w // 2, y + 27, label, 1,
+                             box_w - 10, GREY, max_lines=2)
+
+
+def draw_leads():
+    section_head(178, "THE LEADS")
+    xs = [28, 357, 686]
+    for col, (kicker, head, body) in enumerate(LEADS):
+        x = xs[col]
+        draw_text(x, 206, kicker, 1, RED, bold=True)
+        draw_wrapped(x, 218, head, 2, 310, INK, max_lines=2, leading=17)
+        draw_wrapped(x, 256, body, 1, 310, INK, max_lines=5, leading=10)
+    vline(347, 206, 100, LIGHT, 1)
+    vline(676, 206, 100, LIGHT, 1)
+
+
+def draw_map():
+    section_head(322, "WHERE IT HAPPENED", "SCHEMATIC MAP - NOT TO SCALE")
+    rect(MARGIN, 342, RIGHT - MARGIN, 146, INK, 1)
+    fill_rect(MARGIN + 1, 343, RIGHT - MARGIN - 2, 144, SEA)
+    for poly in CONTINENTS:
+        poly_fill(poly, LAND)
+        poly_outline(poly, LANDLINE)
+    draw_text(95, 392, "N. AMERICA", 1, GREY)
+    draw_text(228, 458, "S. AMERICA", 1, GREY)
+    draw_text(505, 435, "AFRICA", 1, GREY)
+    draw_text(640, 378, "ASIA", 1, GREY)
+    draw_text(700, 478, "AUSTRALIA", 1, GREY)
+    for (dx, dy, label, lx, ly) in DOTS:
+        disc(dx, dy, 5, INK)
+        disc(dx, dy, 3, RED)
+        draw_text(dx + lx, dy + ly, label, 1, INK, bold=True)
+
+
+def draw_briefs():
+    section_head(496, "THE DAY IN BRIEF - 16 STORIES")
+    xs = [28, 273, 518, 763]
+    ys = [522, 592, 662, 732]
+    for i, (head, body) in enumerate(BRIEFS):
+        col = i % 4
+        row = i // 4
+        x = xs[col]
+        y = ys[row]
+        draw_text(x, y, "%02d" % (i + 4), 1, RED, bold=True)
+        draw_wrapped(x + 20, y, head, 1, 213, INK, max_lines=2, leading=10)
+        draw_wrapped(x, y + 22, body, 1, 233, INK, max_lines=3, leading=10)
+    for vx in (261, 506, 751):
+        vline(vx, 522, 276, LIGHT, 1)
+    for hy in (588, 658, 728):
+        hline(MARGIN, hy, RIGHT - MARGIN, LIGHT, 1)
+
+
+def draw_also():
+    section_head(806, "ALSO ON TUESDAY 24 NOVEMBER")
+    for i, item in enumerate(ALSO):
+        col = i // 7
+        row = i % 7
+        x = MARGIN if col == 0 else 524
+        draw_text(x, 832 + row * 19, item, 1, INK)
+
+
+def draw_footer():
+    hline(MARGIN, 972, RIGHT - MARGIN, INK, 2)
+    draw_wrapped(MARGIN, 980,
+                 "DATE CHECK: THE ICJ GENOCIDE RULING WAS HANDED DOWN ON "
+                 "19 NOVEMBER; IT DROVE THE NEWS OF 24 NOVEMBER. UKRAINE "
+                 "SHIP STRIKES WERE ON 22 NOVEMBER, ACKNOWLEDGED ON "
+                 "24 NOVEMBER. THE VILLAVICENCIO BOMB WAS ON MONDAY NIGHT, "
+                 "REPORTED ON TUESDAY.",
+                 1, RIGHT - MARGIN, INK, max_lines=2, leading=10)
+    draw_text(MARGIN, 1002,
+              "SOURCES: DAILY SUMMARY OF, REUTERS, UN NEWS, TSN, "
+              "THE GLOBAL EYE, JUST SECURITY - SEE SOURCES.MD",
+              1, GREY)
 
 
 def build():
-    cv = Canvas(W, H, WHITE)
-    # --- masthead: dark navy, bright yellow, white date ---
-    cv.rect(0, 0, W, 88, NAVY)
-    cv.rect(0, 88, W, 4, GOLD)
-    cv.text_center(4, "THE WORLD IN ONE DAY", 3, GOLD, bold=True)
-    cv.text_center(28, "TUESDAY 24 NOVEMBER 2026", 5, WHITE, bold=True)
-    cv.text_center(70, "32 STORIES - 7 REGIONS - HUAWEI GUILTY - "
-                  "RIYADH HIT - HORMUZ MINES", 2, GOLD2, bold=True)
-    # --- numbers strip: saturated red, white bold text ---
-    cv.rect(0, 92, W, 22, BRIGHTRED)
-    cv.text_center(98, "4 TANKERS HIT MINES - 11 WOUNDED IN RIYADH - "
-                  "31% NVIDIA JUMP - 47,000 WOMEN KILLED", 2, WHITE, bold=True)
-    # --- region strip: gold bar, navy bold text, all 7 regions explicit ---
-    cv.rect(0, 114, W, 20, GOLD)
-    cv.text_center(120, "EUROPE 6 - MIDDLE EAST 7 - AMERICAS 4 - "
-                  "ASIA-PACIFIC 9 - AFRICA 2 - OCEANIA 1 - WORLD 3",
-                  1, NAVY, bold=True)
-    # --- 3 lead stories, each with its own saturated identity ---
-    lead_y, lead_h, lead_w = 134, 258, 304
-    tints = [GREEN_TINT, RED_TINT, ORANGE_TINT]
-    for i, (tag, icon, colour, headline, caption) in enumerate(LEADS):
-        x = 24 + i * (lead_w + 32)
-        cv.rect(x, lead_y, lead_w, lead_h, tints[i])
-        cv.rect(x, lead_y, lead_w, 4, colour)
-        # coloured tag bar with white bold text
-        cv.rect(x, lead_y + 4, lead_w, 24, colour)
-        cv.text_center_in(x, lead_w, lead_y + 10, tag, 2, WHITE, bold=True)
-        # icon on a white disc so it pops on the tint
-        cv.circle(x + 152, lead_y + 78, 46, WHITE)
-        draw_icon(cv, icon, x + 104, lead_y + 30, colour)
-        # headline: large, bold, dark
-        lines = wrap_text(headline, 3, lead_w - 24)
-        hy = lead_y + 132
-        for line in lines[:2]:
-            cv.text_center_in(x, lead_w, hy, line, 3, INK, bold=True)
-            hy += 22
-        cv.line(x + 32, lead_y + 182, x + lead_w - 32, lead_y + 182, colour, 2)
-        clines = wrap_text(caption, 2, lead_w - 32)
-        cy = lead_y + 190
-        for line in clines[:4]:
-            cv.text(x + 16, cy, line, 2, DARK)
-            cy += 17
-    # --- schematic map: pale mint sea, blue-green land, labelled dots ---
-    cv.text_center(396, "WHERE IT HAPPENED", 2, NAVY, bold=True)
-    cv.rect(24, 412, W - 48, 52, MAPBG)
-    cv.rect(24, 412, W - 48, 3, NAVY)
-    for (cx, cy, rx, ry) in MAP_LAND:
-        cv.ellipse(cx, cy, rx, ry, MAPLAND)
-    cv.ellipse(660, 436, 122, 12, MAPLAND2)
-    for (dx, dy, label, lx, ly) in MAP_DOTS:
-        cv.circle(dx, dy, 7, WHITE)
-        cv.circle(dx, dy, 5, BRIGHTRED)
-        lw = text_width(label, 1)
-        cv.rect(lx - 3, ly - 2, lw + 6, 11, WHITE)
-        cv.text(lx, ly, label, 1, NAVY, bold=True)
-    # --- brief grid: coloured header bar, alternating rows ---
-    cv.rect(24, 468, W - 48, 22, NAVY)
-    cv.text(36, 475, "THE DAY IN BRIEF", 2, WHITE, bold=True)
-    row_y, row_h = 490, 34
-    for r in range(8):
-        y = row_y + r * row_h
-        cv.rect(24, y, W - 48, 34, WHITE if r % 2 == 0 else YELLOW_ROW)
-        for c in range(2):
-            idx = r * 2 + c
-            colour, headline, caption = BRIEFS[idx]
-            x = 24 + c * 500
-            cv.rect(x, y, 8, 34, colour)
-            cv.text(x + 16, y + 2, headline, 2, INK, bold=True)
-            cv.text(x + 16, y + 18, caption, 2, DARK)
-    # --- also list: coloured header bar, coloured square bullets ---
-    cv.rect(24, 766, W - 48, 22, RED)
-    cv.text(36, 773, "ALSO ON TUESDAY 24 NOVEMBER", 2, WHITE, bold=True)
-    palette = [GREEN, RED, ORANGE, BLUE, TEAL, PURPLE]
-    ay = 790
-    for i, item in enumerate(ALSO):
-        cv.rect(24, ay + 3, 8, 8, palette[i % len(palette)])
-        cv.text(40, ay, item, 2, INK)
-        ay += 14
-    # --- footer: date check + sources, fully inside with a margin ---
-    cv.rect(0, 978, W, 2, NAVY)
-    cv.text_center(984, "DATE CHECK: ALL STORIES IN 24 NOV 2026 REPORTS - "
-                   "SOME EVENTS SUN 22 - MON 23 NOV", 2, DARK, bold=True)
-    cv.text_center(1002, "SOURCES: DAILY SUMMARY OF, REUTERS, UN NEWS, "
-                   "TSN, UEFA, JUST SECURITY - 24 NOV 2026", 2, DARK)
-    return cv
+    fill_rect(0, 0, W, H, PAPER)
+    draw_masthead()
+    draw_numbers()
+    draw_leads()
+    draw_map()
+    draw_briefs()
+    draw_also()
+    draw_footer()
 
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "/output/entry.png"
-    cv = build()
-    data = cv.png_bytes()
-    d = os.path.dirname(out)
-    try:
-        if d:
-            os.makedirs(d, exist_ok=True)
-        with open(out, "wb") as f:
-            f.write(data)
-    except OSError:
-        out = os.path.join(os.getcwd(), "output", "entry.png")
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        with open(out, "wb") as f:
-            f.write(data)
-    print(out)
-    print(len(data))
+    build()
+    save(out)
 
 
 if __name__ == "__main__":
